@@ -1,0 +1,275 @@
+---
+title: "Titanic Classification Models"
+author: "Aaron Banlao"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+```{r}
+library(pacman)
+library(dplyr)
+p_load(titanic, Amelia, naniar, DataExplorer, tidyverse, janitor, tidymodels, yardstick, randomForest, discrim, klaR, glmnet, xgboost, caret)
+```
+
+
+
+
+# Data
+
+```{r, eval = FALSE}
+library(titanic)
+
+data(titanic_train)
+data(titanic_test)
+
+head(titanic_train)
+head(titanic_test)
+```
+
+```{r}
+#create_report(titanic_train, y = "Survived")
+```
+
+
+## Tidying the data
+```{r}
+titanic_train <- titanic_train %>% 
+  mutate(Sex = as.factor(Sex),
+         Survived = as.factor(Survived),
+         Pclass = as.factor(Pclass),
+         Embarked = as.factor(Embarked))
+
+titanic_test <- titanic_test %>% 
+  mutate(Pclass = as.factor(Pclass), 
+         Sex = as.factor(Sex), 
+         Embarked = as.factor(Embarked))
+
+head(titanic_train)
+head(titanic_test)
+```
+
+```{r}
+summary_null <- data.frame(missing = sapply(titanic_train, function(x) sum(is.na(x))))
+print(summary_null)
+
+sum(nzchar(titanic_train$Cabin))
+```
+
+```{r}
+barplot(table(titanic_train$Embarked))
+```
+
+## Selecting relevant variables to model
+```{r}
+titanic_train <- titanic_train %>% 
+  dplyr::select(Survived, Pclass, Sex, Age, SibSp, Parch, Fare, Embarked)
+
+head(titanic_train)
+```
+
+```{r}
+n <- nrow(titanic_train)
+titanic_train_split <- titanic_train %>% 
+  initial_split(prop = 0.8)
+
+titanic_train_split %>% 
+  training() %>% 
+  head()
+```
+
+```{r}
+titanic_train_recipe <- training(titanic_train_split) %>% 
+  recipe(Survived ~ .) %>% 
+  step_rm(Pclass, Sex, Embarked) %>% 
+  step_nzv(all_predictors()) %>% 
+  step_impute_mean(Age) %>% 
+  prep()
+```
+
+```{r}
+titanic_train_test <- titanic_train_recipe %>% 
+  bake(testing(titanic_train_split))
+
+titanic_train_test
+```
+
+```{r}
+titanic_train_training <- juice(titanic_train_recipe)
+
+titanic_train_training
+```
+
+
+## Creating the Models
+
+### Null Model
+
+```{r}
+titanic_train_training %>% 
+  count(Survived) %>% 
+  mutate(pct = n / sum(n))
+```
+
+```{r}
+titanic_mod_null <- logistic_reg(mode = "classification") %>% 
+  set_engine("glm") %>% 
+  fit(Survived ~ 1, data = titanic_train_training)
+```
+
+```{r}
+pred <- titanic_train_training %>% 
+  dplyr::select(Survived, Age, SibSp, Parch, Fare) %>% 
+  bind_cols(
+    predict(titanic_mod_null, new_data = titanic_train_training, type = "class")
+  ) %>% 
+  rename(survived_null = .pred_class) 
+
+accuracy(pred, Survived, survived_null)
+```
+```{r}
+confusion_null <- pred %>% 
+  conf_mat(truth = Survived, estimate = survived_null)
+
+confusion_null
+```
+
+### KNN 
+
+```{r}
+titanic_mod_knn <- nearest_neighbor(mode = "classification", neighbors = 11) %>% 
+  set_engine("kknn") %>% 
+  fit(Survived ~ ., data = titanic_train_training)
+```
+
+
+```{r}
+titanic_mod_knn %>% 
+  predict(titanic_train_test) %>% 
+  bind_cols(titanic_train_test) %>% 
+  accuracy(truth = Survived, estimate = .pred_class)
+```
+
+```{r}
+titanic_mod_knn %>% 
+  predict(titanic_train_test) %>% 
+  bind_cols(titanic_train_test) %>% 
+  conf_mat(truth = Survived, estimate = .pred_class)
+```
+
+
+
+### Random Forest
+
+```{r}
+titanic_train_forest <- rand_forest(
+  mode = "classification",
+  mtry = 4,
+  trees = 300
+) %>% 
+  set_engine("randomForest") %>% 
+  fit(Survived ~ ., data = titanic_train_training)
+```
+
+
+```{r}
+titanic_train_forest %>% 
+  predict(titanic_train_test) %>% 
+  bind_cols(titanic_train_test) %>% 
+  accuracy(truth = Survived, estimate = .pred_class)
+```
+
+```{r}
+titanic_train_forest %>% 
+  predict(titanic_train_test) %>% 
+  bind_cols(titanic_train_test) %>% 
+  conf_mat(truth = Survived, estimate = .pred_class)
+```
+
+
+### Naive Bayes
+
+```{r}
+titanic_train_nb <- naive_Bayes(mode = "classification") %>% 
+  set_engine("klaR") %>% 
+  fit(Survived ~ ., data = titanic_train_training)
+```
+
+
+```{r}
+titanic_train_nb %>% 
+  predict(titanic_train_test) %>% 
+  bind_cols(titanic_train_test) %>% 
+  accuracy(truth = Survived, estimate = .pred_class)
+```
+
+```{r}
+titanic_train_nb %>% 
+  predict(titanic_train_test) %>% 
+  bind_cols(titanic_train_test) %>% 
+  conf_mat(truth = Survived, estimate = .pred_class)
+```
+
+### Logistic Regression using Regularlization
+
+```{r}
+titanic_train_glm <- logistic_reg(mode = "classification", penalty = 0.001, mixture = 0.5) %>% 
+  set_engine("glmnet") %>% 
+  fit(Survived ~ ., data = titanic_train_training)
+```
+
+```{r}
+titanic_train_glm %>% 
+  predict(titanic_train_test) %>% 
+  bind_cols(titanic_train_test) %>% 
+  accuracy(truth = Survived, estimate = .pred_class)
+```
+
+```{r}
+titanic_train_glm %>% 
+  predict(titanic_train_test) %>% 
+  bind_cols(titanic_train_test) %>% 
+  conf_mat(truth = Survived, estimate = .pred_class)
+```
+
+### XGBoost
+
+```{r}
+titanic_train_xgb <- boost_tree(mode = "classification",trees = 20) %>% 
+  set_engine("xgboost") %>% 
+  fit(Survived ~ ., data = titanic_train_training)
+  
+```
+
+```{r}
+titanic_train_xgb %>% 
+  predict(titanic_train_test) %>% 
+  bind_cols(titanic_train_test) %>% 
+  accuracy(truth = Survived, estimate = .pred_class)
+
+```
+
+```{r}
+titanic_train_xgb %>% 
+  predict(titanic_train_test) %>% 
+  bind_cols(titanic_train_test) %>% 
+  conf_mat(truth = Survived, estimate = .pred_class)
+```
+
+Out of all the models presented, it seems like the XGboost has the best performance. So this is what model we will run on the full titanic_train dataset.
+
+```{r}
+titanic_train_xgb2 <- boost_tree(mode = "classification",trees = 20) %>% 
+  set_engine("xgboost") %>% 
+  fit(Survived ~ ., data = titanic_train)
+```
+
+```{r}
+prediction <- predict(titanic_train_xgb2, titanic_test)
+
+solution <- data.frame(PassengerID = titanic_test$PassengerId, Survived = prediction)
+
+write.csv(solution, file = "titanic_prediction.csv", row.names = F)
+```
+
+
